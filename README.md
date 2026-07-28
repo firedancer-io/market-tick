@@ -12,7 +12,10 @@ applying an off-chain publisher whitelist.
 
 ## Program ID
 
-`Fg6PaFpoGXkYsidMpWxTWqkZK6W2BeZ7FEfcYkgMQhg` (placeholder)
+`bUD41ixzckBZ6bq2Zy1aUnNvnLF9vDuMq1AxjMVH25z` (local testing only)
+
+This keypair is at `market-tick/tests/fixtures/keys/local.json` to make
+and tests reproducible.
 
 The V1 PDA uses seeds `[b"market_tick", b"v1"]`.
 
@@ -23,9 +26,20 @@ controls the introduction of future versions.
 
 ## Build and test
 
+The project requires Rust 1.89 or newer, Anchor CLI 1.1.2, the Solana 3.1.12
+build toolchain, and Surfpool 1.5.x. `Anchor.toml` pins the Anchor and Solana
+versions and configures an offline, clock-driven Surfpool network.
+
 ```sh
-cargo test --workspace
-anchor build
+# Install the shared host-local program keypair where Anchor expects it
+./scripts/setup-tests.sh
+
+# Host-side ABI and layout tests (no validator required)
+cargo test --workspace --lib
+cargo test -p market-tick-abi
+
+# Build the SBF program, deploy it into Surfpool, and run RPC integration tests
+anchor test --validator surfpool
 ```
 
 ## Account ABI v1

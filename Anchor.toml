@@ -1,12 +1,26 @@
 [toolchain]
-anchor_version = "0.32.1"
+anchor_version = "1.1.2"
+solana_version = "3.1.12"
 
 [features]
 resolution = true
 skip-lint = false
 
+[scripts]
+test = "cargo test -p market-tick --test integration -- --test-threads=1"
+
+# Surfpool 1.5.x executes the compiled program with an Agave 4.x SVM
+# while the program and client remain on Anchor-compatible Solana SDK
+# 3.x crates.
+[surfpool]
+online = false
+block_production_mode = "clock"
+slot_time = 400
+startup_wait = 10000
+log_level = "warn"
+
 [programs.localnet]
-market_tick = "Fg6PaFpoGXkYsidMpWxTWqkZK6W2BeZ7FEfcYkgMQhg"
+market_tick = "bUD41ixzckBZ6bq2Zy1aUnNvnLF9vDuMq1AxjMVH25z"
 
 [provider]
 cluster = "localnet"

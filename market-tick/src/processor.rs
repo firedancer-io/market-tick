@@ -56,22 +56,12 @@ pub(super) fn initialize_v1<'info>(
     Ok(())
 }
 
-#[cfg(target_os = "solana")]
 fn invoke_signed_compat(
     instruction: &anchor_lang::solana_program::instruction::Instruction,
     account_infos: &[AccountInfo],
     signer_seeds: &[&[&[u8]]],
 ) -> ProgramResult {
     anchor_lang::solana_program::program::invoke_signed(instruction, account_infos, signer_seeds)
-}
-
-#[cfg(not(target_os = "solana"))]
-fn invoke_signed_compat(
-    instruction: &anchor_lang::solana_program::instruction::Instruction,
-    account_infos: &[AccountInfo],
-    signer_seeds: &[&[&[u8]]],
-) -> ProgramResult {
-    solana_program::program::invoke_signed(instruction, account_infos, signer_seeds)
 }
 
 pub(super) fn increment_v1(

@@ -8,6 +8,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.89"
 license = "Apache-2.0"
 repository = "https://github.com/example/market-tick"
 
@@ -22,8 +23,8 @@ check-cfg = [
 
 [workspace.dependencies]
 market-tick-abi = { path = "crates/market-tick-abi" }
-anchor-lang = "0.32.1"
-solana-pubkey = { version = "2", default-features = false }
+anchor-lang = "=1.1.2"
+solana-pubkey = { version = "3", default-features = false, features = ["curve25519"] }
 
 [profile.release]
 overflow-checks = true

@@ -6,7 +6,7 @@ pub use market_tick_abi as abi;
 use anchor_lang::prelude::*;
 use market_tick_abi::PDA_SEEDS_V1;
 
-declare_id!("Fg6PaFpoGXkYsidMpWxTWqkZK6W2BeZ7FEfcYkgMQhg");
+declare_id!("bUD41ixzckBZ6bq2Zy1aUnNvnLF9vDuMq1AxjMVH25z");
 
 #[program]
 pub mod market_tick {
@@ -47,6 +47,8 @@ pub mod market_tick {
 pub struct Initialize<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// CHECK: The PDA seeds constrain the address; initialization validates its
+    /// owner and empty data before allocating and assigning it to this program.
     #[account(mut, seeds = [PDA_SEEDS_V1[0], PDA_SEEDS_V1[1]], bump)]
     pub pda: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
@@ -56,6 +58,8 @@ pub struct Initialize<'info> {
 /// canonical, writable, program-owned V1 PDA before dispatch.
 #[derive(Accounts)]
 pub struct Increment<'info> {
+    /// CHECK: Seeds and owner constrain this to the program's canonical V1 PDA;
+    /// the processor validates and decodes the versioned account data.
     #[account(
             mut,
             seeds = [PDA_SEEDS_V1[0], PDA_SEEDS_V1[1]],

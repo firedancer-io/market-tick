@@ -13,23 +13,20 @@ crate-type = ["cdylib", "lib"]
 anchor-lang = { workspace = true }
 market-tick-abi = { workspace = true }
 
-# Native program-test needs the legacy syscall-stub wrapper. This dependency is
-# excluded from SBF builds; on-chain CPI goes through Anchor's re-export.
-[target.'cfg(not(target_os = "solana"))'.dependencies]
-solana-program = { version = "2", default-features = false }
-
 [dev-dependencies]
-# Runtime crates are test-only; the deployed program depends on Anchor's
-# stable Solana interfaces instead of an Agave release line.
-solana-program-test = "2.3.13"
-solana-instruction = "2"
-solana-keypair = "2"
-solana-pubkey = "2"
-solana-signer = "2"
-solana-system-interface = "1"
-solana-transaction = "2"
-solana-transaction-error = "2"
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+# These are client-side SDK crates for RPC tests. Surfpool supplies the Agave
+# 4.x runtime that executes the compiled SBF artifact.
+serde_json = "1"
+solana-commitment-config = "3"
+solana-epoch-info = "3"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-pubkey = "3"
+solana-rpc-client = "3"
+solana-signer = "3"
+solana-system-interface = { version = "2", features = ["bincode"] }
+solana-transaction = "3"
+solana-transaction-error = "3"
 
 [features]
 # When set, no entrypoint is compiled (useful when linking the program as a lib

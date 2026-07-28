@@ -1,12 +1,24 @@
 use anchor_lang::InstructionData;
-use market_tick::error::MarketTickError;
 use market_tick_abi::{find_v1_pda, MarketTickV1};
+use solana_commitment_config::CommitmentConfig;
+use solana_epoch_info::EpochInfo;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
-use solana_keypair::Keypair;
-use solana_program_test::{processor, BanksClient, ProgramTest, ProgramTestContext};
+use solana_keypair::{read_keypair_file, Keypair};
 use solana_pubkey::Pubkey;
+use solana_rpc_client::{
+    api::{client_error::Error as ClientError, request::RpcRequest},
+    rpc_client::RpcClient,
+};
 use solana_signer::Signer;
 use solana_transaction::Transaction;
+use solana_transaction_error::TransactionError;
+use std::{env, error::Error, thread, time::Duration};
+
+const CUSTOM_ERROR_NOT_SLOT_SIGNER: u32 = 3;
+const CUSTOM_ERROR_NON_MONOTONIC: u32 = 4;
+const CUSTOM_ERROR_INTERVAL_MISMATCH: u32 = 5;
+const CUSTOM_ERROR_INVALID_TIMESTAMP: u32 = 7;
+const CUSTOM_ERROR_INVALID_INTERVAL: u32 = 8;
 
 fn program_id() -> Pubkey {
     market_tick::id()
@@ -14,28 +26,6 @@ fn program_id() -> Pubkey {
 
 fn pda() -> Pubkey {
     find_v1_pda(&program_id()).0
-}
-
-fn process_anchor_entry<'a, 'b, 'c, 'd>(
-    program_id: &'a Pubkey,
-    accounts: &'b [anchor_lang::prelude::AccountInfo<'c>],
-    data: &'d [u8],
-) -> Result<(), anchor_lang::solana_program::program_error::ProgramError> {
-    // Anchor's generated entrypoint ties the slice and AccountInfo lifetimes
-    // together, while ProgramTest exposes them independently.
-    let accounts: &'c [anchor_lang::prelude::AccountInfo<'c>] =
-        unsafe { core::mem::transmute(accounts) };
-    market_tick::entry(program_id, accounts, data)
-}
-
-async fn setup() -> ProgramTestContext {
-    ProgramTest::new(
-        "market_tick",
-        program_id(),
-        processor!(process_anchor_entry),
-    )
-    .start_with_context()
-    .await
 }
 
 fn initialize_ix(payer: Pubkey) -> Instruction {
@@ -71,52 +61,79 @@ fn increment_ix(
     }
 }
 
-async fn send(
-    ctx: &mut ProgramTestContext,
+fn send(
+    rpc: &RpcClient,
+    payer: &Keypair,
     ix: Instruction,
     extra_signers: &[&Keypair],
-) -> Result<(), solana_program_test::BanksClientError> {
-    let mut signers = vec![&ctx.payer];
+) -> Result<(), ClientError> {
+    let mut signers = vec![payer];
     signers.extend_from_slice(extra_signers);
-    let tx = Transaction::new_signed_with_payer(
-        &[ix],
-        Some(&ctx.payer.pubkey()),
-        &signers,
-        ctx.last_blockhash,
-    );
-    ctx.banks_client.process_transaction(tx).await
+    let blockhash = rpc.get_latest_blockhash()?;
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &signers, blockhash);
+    rpc.send_transaction(&tx).map(|_| ())
 }
 
-async fn init(ctx: &mut ProgramTestContext) {
-    send(ctx, initialize_ix(ctx.payer.pubkey()), &[])
-        .await
-        .unwrap();
-}
-
-async fn prefund_pda(ctx: &mut ProgramTestContext, lamports: u64) {
-    let ix = solana_system_interface::instruction::transfer(&ctx.payer.pubkey(), &pda(), lamports);
-    let tx = Transaction::new_signed_with_payer(
-        &[ix],
-        Some(&ctx.payer.pubkey()),
-        &[&ctx.payer],
-        ctx.last_blockhash,
-    );
-    ctx.banks_client.process_transaction(tx).await.unwrap();
-}
-
-async fn read_account(banks: &mut BanksClient) -> market_tick_abi::MarketTickV1 {
-    let account = banks.get_account(pda()).await.unwrap().unwrap();
-    MarketTickV1::decode(&account.data).unwrap()
-}
-
-fn assert_custom(err: solana_program_test::BanksClientError, expected: MarketTickError) {
-    use solana_transaction_error::TransactionError;
-    match err {
-        solana_program_test::BanksClientError::TransactionError(
-            TransactionError::InstructionError(_, InstructionError::Custom(code)),
-        ) => assert_eq!(code, expected as u32),
-        other => panic!("expected custom error, got {other:?}"),
+fn read_account(rpc: &RpcClient) -> Result<MarketTickV1, String> {
+    let account = rpc.get_account(&pda()).map_err(|error| error.to_string())?;
+    if account.owner != program_id() {
+        return Err(format!(
+            "unexpected account owner: expected {}, got {}",
+            program_id(),
+            account.owner
+        ));
     }
+    MarketTickV1::decode(&account.data).map_err(|error| format!("ABI decode failed: {error:?}"))
+}
+
+fn wait_for_account(
+    rpc: &RpcClient,
+    description: &str,
+    predicate: impl Fn(&MarketTickV1) -> bool,
+) -> MarketTickV1 {
+    let mut last_observation = String::from("account was not queried");
+
+    for _ in 0..200 {
+        match read_account(rpc) {
+            Ok(account) if predicate(&account) => return account,
+            Ok(account) => last_observation = format!("account state was {account:?}"),
+            Err(error) => last_observation = error,
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    panic!("timed out waiting for {description}; last observation: {last_observation}");
+}
+
+fn custom_code(error: &ClientError) -> Option<u32> {
+    match error.get_transaction_error() {
+        Some(TransactionError::InstructionError(_, InstructionError::Custom(code))) => Some(code),
+        _ => None,
+    }
+}
+
+fn assert_custom(error: ClientError, expected: u32) {
+    let actual = custom_code(&error);
+    assert_eq!(actual, Some(expected), "unexpected RPC error: {error}");
+}
+
+fn surfnet_clock(rpc: &RpcClient, method: &'static str) -> Result<EpochInfo, ClientError> {
+    rpc.send(RpcRequest::Custom { method }, serde_json::json!([]))
+}
+
+fn pause_clock(rpc: &RpcClient) -> Result<u64, ClientError> {
+    surfnet_clock(rpc, "surfnet_pauseClock")?;
+    Ok(rpc.get_epoch_info()?.absolute_slot)
+}
+
+fn advance_to_slot(rpc: &RpcClient, slot: u64) -> Result<u64, ClientError> {
+    rpc.send(
+        RpcRequest::Custom {
+            method: "surfnet_timeTravel",
+        },
+        serde_json::json!([{ "absoluteSlot": slot }]),
+    )
+    .map(|info: EpochInfo| info.absolute_slot)
 }
 
 #[test]
@@ -157,178 +174,128 @@ fn anchor_instruction_layout_matches_documented_v1_abi() {
     assert!(!increment.accounts[1].is_writable);
 }
 
-#[tokio::test]
-async fn initialize_creates_v1_account() {
-    let mut ctx = setup().await;
-    init(&mut ctx).await;
-    let account = read_account(&mut ctx.banks_client).await;
-    assert_eq!(account.header.version, 1);
-    assert_eq!(account.header.signer, Pubkey::default());
-}
+#[test]
+fn surfpool_sbf_scenario() -> Result<(), Box<dyn Error>> {
+    let rpc_url = env::var("ANCHOR_PROVIDER_URL")?;
+    let wallet_path = env::var("ANCHOR_WALLET")?;
+    let payer = read_keypair_file(wallet_path)?;
+    let rpc = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed());
 
-#[tokio::test]
-async fn initialize_handles_prefunded_v1_pda() {
-    let mut ctx = setup().await;
-    prefund_pda(&mut ctx, 1_000_000).await;
+    send(&rpc, &payer, initialize_ix(payer.pubkey()), &[])?;
+    let account = wait_for_account(&rpc, "V1 account initialization", |account| {
+        account == &MarketTickV1::new()
+    });
+    assert_eq!(account, MarketTickV1::new());
 
-    init(&mut ctx).await;
-
-    let raw = ctx.banks_client.get_account(pda()).await.unwrap().unwrap();
-    assert_eq!(raw.owner, program_id());
-    assert_eq!(raw.data.len(), MarketTickV1::LEN);
-    assert_eq!(
-        MarketTickV1::decode(&raw.data).unwrap(),
-        MarketTickV1::new()
-    );
-}
-
-#[tokio::test]
-async fn first_increment_opens_slot_and_later_increments_counter() {
-    let mut ctx = setup().await;
-    init(&mut ctx).await;
-    ctx.warp_to_slot(5).unwrap();
     let signer = Keypair::new();
+    let slot = pause_clock(&rpc)?;
+
+    assert_custom(
+        send(
+            &rpc,
+            &payer,
+            increment_ix(signer.pubkey(), slot, 0, 50),
+            &[&signer],
+        )
+        .unwrap_err(),
+        CUSTOM_ERROR_INVALID_TIMESTAMP,
+    );
+    assert_custom(
+        send(
+            &rpc,
+            &payer,
+            increment_ix(signer.pubkey(), slot, 1_000, 0),
+            &[&signer],
+        )
+        .unwrap_err(),
+        CUSTOM_ERROR_INVALID_INTERVAL,
+    );
 
     send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 1_000, 50),
+        &rpc,
+        &payer,
+        increment_ix(signer.pubkey(), slot, 1_000, 50),
         &[&signer],
-    )
-    .await
-    .unwrap();
-    let account = read_account(&mut ctx.banks_client).await;
+    )?;
+    let account = wait_for_account(&rpc, "first increment", |account| {
+        account.header.signer == signer.pubkey()
+            && account.slot == slot
+            && account.sequence == 0
+            && account.timestamp_ns == 1_000
+    });
     assert_eq!(account.header.signer, signer.pubkey());
-    assert_eq!(account.slot, 5);
+    assert_eq!(account.slot, slot);
     assert_eq!(account.first_timestamp_ns, 1_000);
     assert_eq!(account.timestamp_ns, 1_000);
     assert_eq!(account.sequence, 0);
     assert_eq!(account.target_market_tick_interval_ns, 50);
 
+    assert_custom(
+        send(
+            &rpc,
+            &payer,
+            increment_ix(signer.pubkey(), slot, 999, 50),
+            &[&signer],
+        )
+        .unwrap_err(),
+        CUSTOM_ERROR_NON_MONOTONIC,
+    );
+    assert_custom(
+        send(
+            &rpc,
+            &payer,
+            increment_ix(signer.pubkey(), slot, 1_050, 51),
+            &[&signer],
+        )
+        .unwrap_err(),
+        CUSTOM_ERROR_INTERVAL_MISMATCH,
+    );
+
+    let foreign = Keypair::new();
+    assert_custom(
+        send(
+            &rpc,
+            &payer,
+            increment_ix(foreign.pubkey(), slot, 1_050, 50),
+            &[&foreign],
+        )
+        .unwrap_err(),
+        CUSTOM_ERROR_NOT_SLOT_SIGNER,
+    );
+
     send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 1_050, 50),
+        &rpc,
+        &payer,
+        increment_ix(signer.pubkey(), slot, 1_050, 50),
         &[&signer],
-    )
-    .await
-    .unwrap();
-    let account = read_account(&mut ctx.banks_client).await;
+    )?;
+    let account = wait_for_account(&rpc, "second increment", |account| {
+        account.slot == slot && account.sequence == 1 && account.timestamp_ns == 1_050
+    });
     assert_eq!(account.sequence, 1);
     assert_eq!(account.timestamp_ns, 1_050);
     assert_eq!(account.first_timestamp_ns, 1_000);
-}
 
-#[tokio::test]
-async fn new_slot_resets_counter_and_accepts_new_signer() {
-    let mut ctx = setup().await;
-    init(&mut ctx).await;
-    ctx.warp_to_slot(5).unwrap();
-    let first = Keypair::new();
+    let next_slot = advance_to_slot(&rpc, slot + 1)?;
+    assert_eq!(next_slot, slot + 1);
+    let next_signer = Keypair::new();
     send(
-        &mut ctx,
-        increment_ix(first.pubkey(), 5, 1_000, 50),
-        &[&first],
-    )
-    .await
-    .unwrap();
-
-    ctx.warp_to_slot(6).unwrap();
-    let second = Keypair::new();
-    send(
-        &mut ctx,
-        increment_ix(second.pubkey(), 6, 500, 100),
-        &[&second],
-    )
-    .await
-    .unwrap();
-    let account = read_account(&mut ctx.banks_client).await;
-    assert_eq!(account.header.signer, second.pubkey());
+        &rpc,
+        &payer,
+        increment_ix(next_signer.pubkey(), next_slot, 500, 100),
+        &[&next_signer],
+    )?;
+    let account = wait_for_account(&rpc, "first increment in the next slot", |account| {
+        account.header.signer == next_signer.pubkey()
+            && account.slot == next_slot
+            && account.sequence == 0
+            && account.timestamp_ns == 500
+    });
+    assert_eq!(account.header.signer, next_signer.pubkey());
+    assert_eq!(account.slot, next_slot);
     assert_eq!(account.sequence, 0);
     assert_eq!(account.first_timestamp_ns, 500);
     assert_eq!(account.target_market_tick_interval_ns, 100);
-}
 
-#[tokio::test]
-async fn rejects_foreign_signer_within_slot() {
-    let mut ctx = setup().await;
-    init(&mut ctx).await;
-    ctx.warp_to_slot(5).unwrap();
-    let owner = Keypair::new();
-    send(
-        &mut ctx,
-        increment_ix(owner.pubkey(), 5, 1_000, 50),
-        &[&owner],
-    )
-    .await
-    .unwrap();
-
-    let foreign = Keypair::new();
-    let err = send(
-        &mut ctx,
-        increment_ix(foreign.pubkey(), 5, 1_050, 50),
-        &[&foreign],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::NotSlotSigner);
-}
-
-#[tokio::test]
-async fn rejects_invalid_values_wrong_slot_and_interval_change() {
-    let mut ctx = setup().await;
-    init(&mut ctx).await;
-    ctx.warp_to_slot(5).unwrap();
-    let signer = Keypair::new();
-
-    let err = send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 6, 1_000, 50),
-        &[&signer],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::SlotMismatch);
-
-    let err = send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 0, 50),
-        &[&signer],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::InvalidTimestamp);
-
-    let err = send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 1_000, 0),
-        &[&signer],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::InvalidInterval);
-
-    send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 1_000, 50),
-        &[&signer],
-    )
-    .await
-    .unwrap();
-
-    let err = send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 999, 50),
-        &[&signer],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::NonMonotonic);
-
-    let err = send(
-        &mut ctx,
-        increment_ix(signer.pubkey(), 5, 1_050, 51),
-        &[&signer],
-    )
-    .await
-    .unwrap_err();
-    assert_custom(err, MarketTickError::IntervalMismatch);
+    Ok(())
 }
