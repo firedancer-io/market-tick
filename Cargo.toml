@@ -2,15 +2,18 @@
 resolver = "2"
 members = [
     "crates/market-tick-abi",
-    "market-tick",
+    "programs/market-tick",
 ]
+
+[workspace.metadata.cli]
+solana = "3.1.12"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0"
-repository = "https://github.com/example/market-tick"
+repository = "https://github.com/firedancer-io/market-tick"
 
 # Allow target cfgs emitted by the Solana/Anchor entrypoint macros.
 [workspace.lints.rust.unexpected_cfgs]
@@ -24,7 +27,6 @@ check-cfg = [
 [workspace.dependencies]
 market-tick-abi = { path = "crates/market-tick-abi" }
 anchor-lang = "=1.1.2"
-solana-pubkey = { version = "3", default-features = false, features = ["curve25519"] }
 
 [profile.release]
 overflow-checks = true

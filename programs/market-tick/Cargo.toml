@@ -29,8 +29,7 @@ solana-transaction = "3"
 solana-transaction-error = "3"
 
 [features]
-# When set, no entrypoint is compiled (useful when linking the program as a lib
-# into other programs or tests).
+default = ["no-log-ix-name"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []

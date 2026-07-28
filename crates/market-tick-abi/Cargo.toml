@@ -6,9 +6,6 @@ license.workspace = true
 repository.workspace = true
 description = "Shared, versioned binary ABI for the Market Tick program"
 
-[dependencies]
-solana-pubkey = { workspace = true }
-
 [features]
 default = []
 

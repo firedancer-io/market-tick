@@ -7,7 +7,7 @@ resolution = true
 skip-lint = false
 
 [scripts]
-test = "cargo test -p market-tick --test integration -- --test-threads=1"
+test = "cargo test -p market-tick --test integration -- --ignored --test-threads=1"
 
 # Surfpool 1.5.x executes the compiled program with an Agave 4.x SVM
 # while the program and client remain on Anchor-compatible Solana SDK
@@ -20,11 +20,17 @@ startup_wait = 10000
 log_level = "warn"
 
 [programs.localnet]
-market_tick = "bUD41ixzckBZ6bq2Zy1aUnNvnLF9vDuMq1AxjMVH25z"
+market_tick = "tickUcsEQegChaAuo9VYQQztB4ZGApY6ZT4FkULWY6N"
+
+[programs.devnet]
+market_tick = "tickUcsEQegChaAuo9VYQQztB4ZGApY6ZT4FkULWY6N"
+
+[programs.testnet]
+market_tick = "tickUcsEQegChaAuo9VYQQztB4ZGApY6ZT4FkULWY6N"
 
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [workspace]
-members = ["market-tick"]
+members = ["programs/market-tick"]

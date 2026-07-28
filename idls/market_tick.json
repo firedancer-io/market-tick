@@ -1,0 +1,187 @@
+{
+  "address": "tickUcsEQegChaAuo9VYQQztB4ZGApY6ZT4FkULWY6N",
+  "metadata": {
+    "name": "market_tick",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Sub-slot market tick Solana program",
+    "repository": "https://github.com/firedancer-io/market-tick"
+  },
+  "instructions": [
+    {
+      "name": "increment",
+      "discriminator": [
+        1
+      ],
+      "accounts": [
+        {
+          "name": "pda",
+          "writable": true
+        },
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "slot",
+          "type": "u64"
+        },
+        {
+          "name": "timestamp_ns",
+          "type": "i64"
+        },
+        {
+          "name": "target_market_tick_interval_ns",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        0
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  116,
+                  105,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  49
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "MarketTickV1Account",
+      "discriminator": [
+        77,
+        82,
+        75,
+        84,
+        75,
+        86,
+        48,
+        49
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "SlotMismatch",
+      "msg": "Instruction slot does not match the runtime clock slot"
+    },
+    {
+      "code": 6001,
+      "name": "NotSlotSigner",
+      "msg": "Signer is not the signer selected for this slot"
+    },
+    {
+      "code": 6002,
+      "name": "NonMonotonic",
+      "msg": "Timestamp must strictly increase within a slot"
+    },
+    {
+      "code": 6003,
+      "name": "IntervalMismatch",
+      "msg": "Target interval cannot change within a slot"
+    },
+    {
+      "code": 6004,
+      "name": "CounterOverflow",
+      "msg": "Sequence counter overflow"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidTimestamp",
+      "msg": "Timestamp must be positive"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidInterval",
+      "msg": "Target interval must be nonzero"
+    }
+  ],
+  "types": [
+    {
+      "name": "MarketTickV1Account",
+      "docs": [
+        "Fixed-layout V1 Market Tick account."
+      ],
+      "serialization": {
+        "custom": "market-tick-v1"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "first_timestamp_ns",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp_ns",
+            "type": "i64"
+          },
+          {
+            "name": "sequence",
+            "type": "u64"
+          },
+          {
+            "name": "target_market_tick_interval_ns",
+            "type": "u64"
+          },
+          {
+            "name": "observed_market_tick_interval_ns",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}
