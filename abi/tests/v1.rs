@@ -62,6 +62,19 @@ fn encoded_account_roundtrips() {
 }
 
 #[test]
+fn from_bytes_mut_mutates_account_bytes_in_place() {
+    let mut bytes = encode(&MarketTickV1::new());
+    {
+        let acct = MarketTickV1::from_bytes_mut(&mut bytes).unwrap();
+        acct.slot = 42;
+        acct.sequence = 7;
+    }
+
+    assert_eq!(MarketTickV1::from_bytes(&bytes).unwrap().slot, 42);
+    assert_eq!(MarketTickV1::from_bytes(&bytes).unwrap().sequence, 7);
+}
+
+#[test]
 fn rejects_invalid_discriminator() {
     let mut bytes = encode(&MarketTickV1::new());
     bytes[0] ^= 0xff;
