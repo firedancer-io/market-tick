@@ -1,0 +1,44 @@
+/build
+dump
+tmp
+target/
+.anchor/
+.surfpool/
+release/
+releases/
+
+# Local deployment tooling and state
+/deploy/
+
+# Nix
+/result
+
+# Vimdiff
+*.orig
+
+# Vim
+*.swp
+*.swo
+
+# VSCode
+.vscode
+
+# JetBrains
+.fleet
+.idea
+
+# Logs
+*.log
+
+# Custom config
+/*.sh
+
+# Python
+venv
+.venv
+*.pyc
+*.egg-info/
+
+# LLMs
+.claude
+.codex

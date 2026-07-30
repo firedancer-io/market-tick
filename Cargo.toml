@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/market-tick-abi",
+    "programs/market-tick",
+]
+
+[workspace.metadata.cli]
+solana = "3.1.12"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+repository = "https://github.com/firedancer-io/market-tick"
+
+# Allow target cfgs emitted by the Solana/Anchor entrypoint macros.
+[workspace.lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("frozen-abi", "no-entrypoint", "custom-heap", "custom-panic"))',
+    'cfg(target_arch, values("sbf"))',
+]
+
+[workspace.dependencies]
+market-tick-abi = { path = "crates/market-tick-abi" }
+anchor-lang = "=1.1.2"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
