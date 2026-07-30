@@ -1,0 +1,36 @@
+[package]
+name = "p-tick"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pinocchio rewrite of the sub-slot market tick Solana program"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "p_tick"
+
+[dependencies]
+market-tick-abi = { workspace = true }
+pinocchio = { workspace = true }
+pinocchio-system = { workspace = true }
+solana-pubkey = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+solana-commitment-config = "3"
+solana-epoch-info = "3"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-pubkey = { version = "3", default-features = true, features = ["curve25519"] }
+solana-rpc-client = "3"
+solana-signer = "3"
+solana-system-interface = { version = "2", features = ["bincode"] }
+solana-transaction = "3"
+solana-transaction-error = "3"
+
+[features]
+no-entrypoint = []
+
+[lints]
+workspace = true
