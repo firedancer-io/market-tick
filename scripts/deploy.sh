@@ -11,17 +11,17 @@ set -eu
 #      `solana-verify build --library-name market_tick` and deploys the
 #      resulting target/deploy/market_tick.so from that exact commit.
 #
-#   3. Fund the --fee-payer on the selected cluster and check its balance:
+#   3. Fund the --fee-payer and check its balance:
 #        solana balance --url <RPC_URL> /secure/path/fee-payer.json
 #
 #   4. Select the upgrade authority:
-#        - Pass --authority-keypair for a directly controlled authority; or
+#        - Pass --authority-keypair for a single authority; or
 #        - Pass the verified Squads vault PDA as --squads-vault-pubkey.
 #
-# The script generates and uploads the Anchor IDL, uploads Solana verified-build
-# metadata for the current commit, and then transfers authority when using
-# Squads. Verify the Squads vault separately before deployment and verify all
-# on-chain state afterward.
+# The script generates and uploads the Anchor IDL, uploads Solana
+# verified-build metadata for the current commit, and then transfers
+# authority when using Squads. Verify the Squads vault separately before
+# deployment and verify all on-chain state afterward.
 usage() {
     cat >&2 <<EOF
 Usage:
@@ -46,6 +46,8 @@ Authority (choose one mode):
 Other options:
   --expected-genesis-hash HASH        Required with --rpc-url; not valid with
                                       -um, -ut, or -ud
+  --skip-onchain-metadata             Skip Anchor IDL and verified-build metadata
+                                      uploads; executable hash checks still run
   --yes                               Skip the deployment confirmation prompt
 EOF
     exit 2
@@ -64,6 +66,7 @@ program_keypair=
 vault_pubkey=
 authority_keypair=
 auto_confirm=0
+skip_onchain_metadata=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -108,6 +111,10 @@ while [ "$#" -gt 0 ]; do
                 --authority-keypair) authority_keypair=$2 ;;
             esac
             shift 2
+            ;;
+        --skip-onchain-metadata)
+            skip_onchain_metadata=1
+            shift
             ;;
         --yes)
             auto_confirm=1
@@ -252,6 +259,11 @@ echo "Repository: $repository"
 echo "Program binary: $program_binary"
 echo "Generated IDL: $idl_file"
 echo "Authority mode: $authority_mode"
+if [ "$skip_onchain_metadata" -eq 1 ]; then
+    echo "On-chain metadata: skipped"
+else
+    echo "On-chain metadata: enabled"
+fi
 if [ -n "$vault_pubkey" ]; then
     echo "Squads vault: $vault_pubkey"
 fi
@@ -264,6 +276,7 @@ if [ "$auto_confirm" -eq 0 ]; then
 fi
 
 solana program deploy --url "$rpc_url" --commitment finalized --use-rpc \
+    --max-sign-attempts 100 \
     --fee-payer "$fee_payer" \
     --keypair "$deployment_authority_keypair" \
     --upgrade-authority "$deployment_authority_keypair" \
@@ -279,36 +292,42 @@ onchain_hash=$(solana-verify --url "$rpc_url" get-program-hash "$program_id" | a
     exit 1
 }
 
-if anchor idl fetch --provider.cluster "$rpc_url" "$program_id" >/dev/null 2>&1; then
-    anchor idl upgrade --provider.cluster "$rpc_url" \
-        --provider.wallet "$deployment_authority_keypair" \
-        --commitment finalized --filepath "$idl_file" "$program_id"
-else
-    anchor idl init --provider.cluster "$rpc_url" \
-        --provider.wallet "$deployment_authority_keypair" \
-        --commitment finalized --filepath "$idl_file" "$program_id"
-fi
-anchor idl fetch --provider.cluster "$rpc_url" --commitment finalized \
-    --out "$onchain_idl_file" "$program_id"
-onchain_idl_json=$(jq -S -c . "$onchain_idl_file")
-[ "$onchain_idl_json" = "$generated_idl_json" ] || {
-    echo "on-chain IDL does not match the generated and committed IDL" >&2
-    exit 1
-}
+if [ "$skip_onchain_metadata" -eq 0 ]; then
+    if anchor idl fetch --provider.cluster "$rpc_url" "$program_id" >/dev/null 2>&1; then
+        anchor idl upgrade --provider.cluster "$rpc_url" \
+            --provider.wallet "$deployment_authority_keypair" \
+            --commitment finalized --filepath "$idl_file" "$program_id"
+    else
+        anchor idl init --provider.cluster "$rpc_url" \
+            --provider.wallet "$deployment_authority_keypair" \
+            --commitment finalized --filepath "$idl_file" "$program_id"
+    fi
+    anchor idl fetch --provider.cluster "$rpc_url" --commitment finalized \
+        --out "$onchain_idl_file" "$program_id"
+    onchain_idl_json=$(jq -S -c . "$onchain_idl_file")
+    [ "$onchain_idl_json" = "$generated_idl_json" ] || {
+        echo "on-chain IDL does not match the generated and committed IDL" >&2
+        exit 1
+    }
 
-solana-verify --url "$rpc_url" verify-from-repo \
-    --program-id "$program_id" \
-    --commit-hash "$commit" \
-    --library-name market_tick \
-    --keypair "$deployment_authority_keypair" \
-    --skip-prompt \
-    "$repository"
+    solana-verify --url "$rpc_url" verify-from-repo \
+        --program-id "$program_id" \
+        --commit-hash "$commit" \
+        --library-name market_tick \
+        --keypair "$deployment_authority_keypair" \
+        --skip-prompt \
+        "$repository"
+else
+    echo "Skipping Anchor IDL and verified-build metadata uploads"
+fi
 
 if [ -n "$vault_pubkey" ]; then
-    npx --yes "--package=@solana-program/program-metadata@$PMP_CLIENT_VERSION" -- \
-        program-metadata remove-authority idl "$program_id" \
-        --rpc "$rpc_url" \
-        --keypair "$deployment_authority_keypair"
+    if [ "$skip_onchain_metadata" -eq 0 ]; then
+        npx --yes "--package=@solana-program/program-metadata@$PMP_CLIENT_VERSION" -- \
+            program-metadata remove-authority idl "$program_id" \
+            --rpc "$rpc_url" \
+            --keypair "$deployment_authority_keypair"
+    fi
 
     solana program set-upgrade-authority --url "$rpc_url" \
         --commitment finalized \
@@ -343,6 +362,11 @@ final_program_hash=$(solana-verify --url "$rpc_url" \
 echo "Deployment completed successfully"
 echo "Program ID: $program_id"
 echo "Program hash: $final_program_hash"
-echo "IDL uploaded from commit: $commit"
-echo "Verified-build metadata uploaded for: $repository"
+if [ "$skip_onchain_metadata" -eq 0 ]; then
+    echo "IDL uploaded from commit: $commit"
+    echo "Verified-build metadata uploaded for: $repository"
+else
+    echo "On-chain IDL and verified-build metadata: skipped"
+    echo "Committed IDL validated at: $committed_idl"
+fi
 echo "Upgrade authority: $observed_authority"
