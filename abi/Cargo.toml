@@ -1,0 +1,17 @@
+[package]
+name = "market-tick-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared, versioned binary ABI for the Market Tick program"
+
+[dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
+solana-pubkey = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

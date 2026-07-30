@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "abi",
+    "market-tick",
+    "p-tick",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+repository = "https://github.com/example/market-tick"
+
+# Allow target cfgs emitted by the Solana/Anchor/Pinocchio entrypoint macros.
+[workspace.lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("frozen-abi", "no-entrypoint", "custom-heap", "custom-panic", "bpf-entrypoint"))',
+    'cfg(target_arch, values("sbf", "bpf"))',
+]
+
+[workspace.dependencies]
+market-tick-abi = { path = "abi" }
+anchor-lang = "=1.1.2"
+pinocchio = { version = "0.11", default-features = false, features = ["copy", "cpi", "sha2"] }
+pinocchio-system = "0.6"
+bytemuck = { version = "1", default-features = false }
+solana-pubkey = { version = "3", default-features = false, features = ["bytemuck", "curve25519"] }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1

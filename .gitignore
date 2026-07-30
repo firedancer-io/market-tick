@@ -1,0 +1,39 @@
+/build
+dump
+tmp
+target/
+.anchor/
+.surfpool/
+
+# Nix
+/result
+
+# Vimdiff
+*.orig
+
+# Vim
+*.swp
+*.swo
+
+# VSCode
+.vscode
+
+# JetBrains
+.fleet
+.idea
+
+# Logs
+*.log
+
+# Custom config
+/*.sh
+
+# Python
+venv
+.venv
+*.pyc
+*.egg-info/
+
+# LLMs
+.claude
+.codex
