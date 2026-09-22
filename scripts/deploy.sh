@@ -1,6 +1,20 @@
 #!/bin/sh
 set -eu
 
+# Release configuration. Keep these in sync with the Cargo/Anchor pins.
+ANCHOR_VERSION=1.2.0
+SOLANA_VERSION=4.3.0
+SOLANA_VERIFY_VERSION=0.5.2
+BUILD_SBF_VERSION=4.3.0
+# Match the program-metadata client used by the selected Anchor release.
+PMP_CLIENT_VERSION=0.5.1
+MARKET_TICK_ARCH=v3
+MARKET_TICK_TOOLS_VERSION=v1.57
+MARKET_TICK_ELF_MACHINE=0xF7 # EM_BPF
+MARKET_TICK_ACCOUNT_VERSION=1
+# Upstream image selected by solana-verify for the Cargo.toml Solana pin.
+BUILD_IMAGE=solanafoundation/solana-verifiable-build@sha256:12fd4c0a0790f0fc41ef74b0cdb6bccc167ba6137eb1adb749bac649481c86bd
+
 # Prepare a deployment from the repository root:
 #
 #   1. Securely provide the program address keypair whose public key is
@@ -8,8 +22,9 @@ set -eu
 #
 #   2. Commit and push the release to the public repository configured
 #      in Cargo.toml. The working tree must be clean. This script runs
-#      `solana-verify build --library-name market_tick` and deploys the
-#      resulting target/deploy/market_tick.so from that exact commit.
+#      `solana-verify build`, selecting the upstream image from the
+#      Solana version pin in Cargo.toml, and deploys the resulting
+#      target/deploy/market_tick.so from that exact commit.
 #
 #   3. Fund the --fee-payer and check its balance:
 #        solana balance --url <RPC_URL> /secure/path/fee-payer.json
@@ -44,17 +59,16 @@ Authority (choose one mode):
   --squads-vault-pubkey PUBKEY        Use this Squads vault as upgrade authority
 
 Other options:
+  --buffer-keypair PATH               Retain this buffer keypair for retries
   --expected-genesis-hash HASH        Required with --rpc-url; not valid with
                                       -um, -ut, or -ud
   --skip-onchain-metadata             Skip Anchor IDL and verified-build metadata
                                       uploads; executable hash checks still run
+  --prepare-only                      Build and check the release without signing
   --yes                               Skip the deployment confirmation prompt
 EOF
     exit 2
 }
-
-# Match program-metadata client version pinned by anchor-cli 1.1.2
-PMP_CLIENT_VERSION=0.5.1
 
 rpc_url=
 expected_genesis_hash=
@@ -67,6 +81,8 @@ vault_pubkey=
 authority_keypair=
 auto_confirm=0
 skip_onchain_metadata=0
+prepare_only=0
+buffer_keypair=
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -91,7 +107,7 @@ while [ "$#" -gt 0 ]; do
             esac
             shift
             ;;
-        --rpc-url|--expected-genesis-hash|--fee-payer|--program-keypair|--squads-vault-pubkey|--authority-keypair)
+        --rpc-url|--expected-genesis-hash|--fee-payer|--program-keypair|--squads-vault-pubkey|--authority-keypair|--buffer-keypair)
             [ "$#" -ge 2 ] || usage
             case "$1" in
                 --rpc-url)
@@ -109,6 +125,7 @@ while [ "$#" -gt 0 ]; do
                 --program-keypair) program_keypair=$2 ;;
                 --squads-vault-pubkey) vault_pubkey=$2 ;;
                 --authority-keypair) authority_keypair=$2 ;;
+                --buffer-keypair) buffer_keypair=$2 ;;
             esac
             shift 2
             ;;
@@ -118,6 +135,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --yes)
             auto_confirm=1
+            shift
+            ;;
+        --prepare-only)
+            prepare_only=1
             shift
             ;;
         *) usage ;;
@@ -139,7 +160,7 @@ else
     deployment_authority_keypair=$authority_keypair
 fi
 
-for tool in anchor curl git jq node npx solana solana-keygen solana-verify; do
+for tool in anchor curl docker git jq node npx python3 solana solana-keygen solana-verify; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "missing required tool: $tool" >&2
         exit 1
@@ -152,8 +173,29 @@ done
     echo "missing authority keypair: $deployment_authority_keypair" >&2
     exit 1
 }
+# Source verification changes directory; preserve relative keypair arguments.
+absolute_keypair_path() {
+    printf '%s/%s\n' "$(CDPATH= cd -- "$(dirname -- "$1")" && pwd)" "$(basename -- "$1")"
+}
+fee_payer=$(absolute_keypair_path "$fee_payer")
+program_keypair=$(absolute_keypair_path "$program_keypair")
+deployment_authority_keypair=$(absolute_keypair_path "$deployment_authority_keypair")
+if [ -n "$buffer_keypair" ]; then
+    [ -f "$buffer_keypair" ] || { echo "missing buffer keypair: $buffer_keypair" >&2; exit 1; }
+    buffer_keypair=$(absolute_keypair_path "$buffer_keypair")
+fi
 
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+check_tool_version() {
+    tool_version=$("$1" --version | awk '{print $2}')
+    [ "$tool_version" = "$2" ] || {
+        echo "$1 $2 required (found ${tool_version:-unknown})" >&2
+        exit 1
+    }
+}
+check_tool_version anchor "$ANCHOR_VERSION"
+check_tool_version solana "$SOLANA_VERSION"
+check_tool_version solana-verify "$SOLANA_VERIFY_VERSION"
 [ -z "$(git -C "$root_dir" status --porcelain)" ] || {
     echo "deployment requires a clean Git working tree" >&2
     exit 1
@@ -180,11 +222,11 @@ source_program_id=$(sed -n 's/.*declare_id!("\([^"]*\)").*/\1/p' "$source_file")
     echo "program keypair does not match declare_id!()" >&2
     exit 1
 }
-source_pda=$(sed -n 's/.*const PDA_V1: Pubkey = pubkey!("\([^"]*\)").*/\1/p' "$source_file")
+source_pda=$(sed -n 's/.*const PDA_V'"$MARKET_TICK_ACCOUNT_VERSION"': Pubkey = pubkey!("\([^"]*\)").*/\1/p' "$source_file")
 derived_pda=$(solana find-program-derived-address "$program_id" \
-    string:market_tick string:v1 --output json-compact | jq -er '.address')
+    string:market_tick "string:v$MARKET_TICK_ACCOUNT_VERSION" --output json-compact | jq -er '.address')
 [ -n "$source_pda" ] && [ "$source_pda" = "$derived_pda" ] || {
-    echo "compiled V1 PDA does not match the program ID and V1 seeds" >&2
+    echo "compiled V$MARKET_TICK_ACCOUNT_VERSION PDA does not match the program ID and seeds" >&2
     echo "compiled: ${source_pda:-missing}" >&2
     echo "derived:  $derived_pda" >&2
     exit 1
@@ -201,7 +243,26 @@ trap 'rm -f "$idl_file" "$onchain_idl_file"' EXIT HUP INT TERM
 (
     cd "$root_dir"
     anchor idl build --program-name market-tick --out "$idl_file"
-    solana-verify build --library-name market_tick
+    image_versions=$(docker run --rm "$BUILD_IMAGE" cargo build-sbf --version)
+    printf '%s\n' "$image_versions" | grep -Fxq "cargo-build-sbf $BUILD_SBF_VERSION" && \
+        printf '%s\n' "$image_versions" | grep -Fxq "platform-tools $MARKET_TICK_TOOLS_VERSION" || {
+        echo "build image must contain cargo-build-sbf $BUILD_SBF_VERSION and platform-tools $MARKET_TICK_TOOLS_VERSION" >&2
+        exit 1
+    }
+    mkdir -p target
+    build_log=$(mktemp "$root_dir/target/sbpf-build.XXXXXX.log")
+    if ! solana-verify build --library-name market_tick \
+        --arch "$MARKET_TICK_ARCH" \
+        --cargo-build-sbf-args="--tools-version $MARKET_TICK_TOOLS_VERSION" >"$build_log" 2>&1; then
+        cat "$build_log"
+        exit 1
+    fi
+    cat "$build_log"
+    # LLVM stack diagnostics do not necessarily make Cargo fail.
+    if grep -Ei 'stack offset.*exceeded|stack frame.*exceeded|stack size.*exceeded|Error:' "$build_log"; then
+        echo "release build has compiler errors; see $build_log" >&2
+        exit 1
+    fi
 )
 program_binary="$root_dir/target/deploy/market_tick.so"
 [ -f "$program_binary" ] || {
@@ -234,9 +295,24 @@ deployment_authority=$(solana-keygen pubkey "$deployment_authority_keypair")
 if [ -z "$vault_pubkey" ]; then
     final_authority=$deployment_authority
 fi
+python3 - "$program_binary" "$MARKET_TICK_ARCH" "$MARKET_TICK_ELF_MACHINE" <<'PY'
+import struct
+import sys
+
+# ELF e_flags stores the numeric sBPF architecture version.
+expected_version = int(sys.argv[2].removeprefix('v'))
+expected_machine = int(sys.argv[3], 0)
+with open(sys.argv[1], 'rb') as program:
+    header = program.read(64)
+if (len(header) != 64 or header[:7] != b'\x7fELF\x02\x01\x01'
+        or struct.unpack_from('<H', header, 18)[0] != expected_machine
+        or struct.unpack_from('<I', header, 48)[0] != expected_version):
+    sys.exit(f'release artifact must be little-endian ELF64 / machine={expected_machine:#x} / SBPFv{expected_version}')
+PY
 
 existing_authority=
-if program_json=$(solana program show --url "$rpc_url" --output json "$program_id" 2>/dev/null); then
+if program_json=$(solana program show --url "$rpc_url" \
+    --keypair "$deployment_authority_keypair" --output json "$program_id" 2>/dev/null); then
     existing_authority=$(printf '%s' "$program_json" | jq -r '.authority // .upgradeAuthority // empty')
     if [ "$existing_authority" = "$final_authority" ] && [ -n "$vault_pubkey" ]; then
         echo "program is already controlled by the Squads vault; use the multisig upgrade flow" >&2
@@ -257,6 +333,10 @@ echo "Program ID: $program_id"
 echo "Source commit: $commit"
 echo "Repository: $repository"
 echo "Program binary: $program_binary"
+echo "Build image: $BUILD_IMAGE"
+local_hash=$(solana-verify get-executable-hash "$program_binary" | awk 'NF { value=$NF } END { print value }')
+[ -n "$local_hash" ] || { echo 'missing executable hash' >&2; exit 1; }
+echo "Program hash: $local_hash"
 echo "Generated IDL: $idl_file"
 echo "Authority mode: $authority_mode"
 if [ "$skip_onchain_metadata" -eq 1 ]; then
@@ -268,6 +348,10 @@ if [ -n "$vault_pubkey" ]; then
     echo "Squads vault: $vault_pubkey"
 fi
 echo "Final upgrade authority: $final_authority"
+if [ "$prepare_only" -eq 1 ]; then
+    echo 'Preparation complete; no transactions submitted'
+    exit 0
+fi
 
 if [ "$auto_confirm" -eq 0 ]; then
     printf 'Deploy this release? [y/N] '
@@ -275,15 +359,19 @@ if [ "$auto_confirm" -eq 0 ]; then
     case "$answer" in y|Y|yes|YES) ;; *) echo "aborted"; exit 1 ;; esac
 fi
 
+set --
+if [ -n "$buffer_keypair" ]; then
+    set -- --buffer "$buffer_keypair"
+fi
 solana program deploy --url "$rpc_url" --commitment finalized --use-rpc \
     --max-sign-attempts 100 \
     --fee-payer "$fee_payer" \
     --keypair "$deployment_authority_keypair" \
     --upgrade-authority "$deployment_authority_keypair" \
     --program-id "$program_keypair" \
+    "$@" \
     "$program_binary"
 
-local_hash=$(solana-verify get-executable-hash "$program_binary" | awk 'NF { value=$NF } END { print value }')
 onchain_hash=$(solana-verify --url "$rpc_url" get-program-hash "$program_id" | awk 'NF { value=$NF } END { print value }')
 [ -n "$local_hash" ] && [ "$local_hash" = "$onchain_hash" ] || {
     echo "deployed program does not match the verifiable build" >&2
@@ -310,13 +398,21 @@ if [ "$skip_onchain_metadata" -eq 0 ]; then
         exit 1
     }
 
-    solana-verify --url "$rpc_url" verify-from-repo \
-        --program-id "$program_id" \
-        --commit-hash "$commit" \
-        --library-name market_tick \
-        --keypair "$deployment_authority_keypair" \
-        --skip-prompt \
-        "$repository"
+    # Keep the verification clone under the mounted workspace, so sibling
+    # Docker builds can read it when this script runs inside a container.
+    mkdir -p "$root_dir/target/verification"
+    (
+        cd "$root_dir/target/verification"
+        solana-verify --url "$rpc_url" verify-from-repo --current-dir \
+            --program-id "$program_id" \
+            --commit-hash "$commit" \
+            --library-name market_tick \
+            --arch "$MARKET_TICK_ARCH" \
+            --cargo-build-sbf-args="--tools-version $MARKET_TICK_TOOLS_VERSION" \
+            --keypair "$deployment_authority_keypair" \
+            --skip-prompt \
+            "$repository"
+    )
 else
     echo "Skipping Anchor IDL and verified-build metadata uploads"
 fi
@@ -340,6 +436,7 @@ if [ -n "$vault_pubkey" ]; then
 fi
 
 final_program_json=$(solana program show --url "$rpc_url" \
+    --keypair "$deployment_authority_keypair" \
     --commitment finalized --output json "$program_id")
 observed_authority=$(printf '%s' "$final_program_json" | \
     jq -r '.authority // .upgradeAuthority // empty')

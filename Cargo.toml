@@ -6,7 +6,10 @@ members = [
 ]
 
 [workspace.metadata.cli]
-solana = "3.1.12"
+solana = "4.3.0"
+
+[workspace.metadata.solana]
+tools-version = "v1.57"
 
 [workspace.package]
 version = "0.1.0"
@@ -26,7 +29,7 @@ check-cfg = [
 
 [workspace.dependencies]
 market-tick-abi = { path = "crates/market-tick-abi" }
-anchor-lang = "=1.1.2"
+anchor-lang = "=1.2.0"
 
 [profile.release]
 overflow-checks = true
